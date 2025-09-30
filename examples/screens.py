@@ -726,8 +726,9 @@ def main():
                 # Flashing: alternate between bright red and darker red every ERROR_FLASH_PERIOD
                 now = time.monotonic()
                 phase = int(now / ERROR_FLASH_PERIOD) % 2
-                bright = (255, 0, 0)
-                dim    = (100, 0, 0)
+                # Colors are BGR tuples (like the rest of the file). Red is (0,0,255).
+                bright = (0, 0, 255)
+                dim    = (0, 0, 100)
                 bg = bright if phase == 0 else dim
                 # Only update the display when the title/msg OR bg phase changes to reduce redraws
                 if (title, msg, phase) != last_err:
