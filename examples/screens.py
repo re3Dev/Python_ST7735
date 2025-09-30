@@ -6,7 +6,7 @@ import time, math, requests, traceback
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from PIL import Image, ImageDraw, ImageFont, Image as PILImage
-
+import os, configparser
 import ST7735 as TFT
 import Adafruit_GPIO.SPI as SPI
 
@@ -24,6 +24,7 @@ LAND_W, LAND_H = 160, 128          # draw in landscape
 PORTRAIT_W, PORTRAIT_H = 128, 160  # driver expects portrait
 OFF_X, OFF_Y = 2, 1
 FLIP_LEFT_180 = True
+VARS_PATH = "/home/pi/printer_data/config/save_variables.cfg"
 
 # ----------------- DISPLAY SETUP -----------------
 LEFT  = TFT.ST7735(25, rst=23, spi=SPI.SpiDev(0, 0, max_speed_hz=BAUD)); LEFT.begin()
@@ -42,6 +43,39 @@ def load_font():
         f = ImageFont.load_default()
         return {"xl": f, "lg": f, "md": f, "sm": f, "xs": f}
 FONTS = load_font()
+
+_last_vars_mtime = None
+_last_active_tool = 0  # default to left
+
+def get_active_tool(path: str = VARS_PATH) -> int:
+    """
+    Reads [Variables] active_tool from Klipper's save_variables.cfg.
+    Returns 0 for left (T0) or 1 for right (T1). Falls back to last known / 0.
+    """
+    global _last_vars_mtime, _last_active_tool
+
+    try:
+        st = os.stat(path)
+        mtime = st.st_mtime
+        # Only re-read if file changed
+        if _last_vars_mtime is not None and mtime == _last_vars_mtime:
+            return _last_active_tool
+
+        cfg = configparser.ConfigParser()
+        # Klipper writes standard INI; allow no-value quirks just in case
+        cfg.read(path)
+
+        val = cfg.getint("Variables", "active_tool", fallback=_last_active_tool)
+        if val not in (0, 1):
+            val = _last_active_tool
+
+        _last_active_tool = val
+        _last_vars_mtime = mtime
+        return val
+
+    except Exception:
+        # If anything goes wrong, keep using the last known value
+        return _last_active_tool
 
 # ----------------- DATA MODEL -----------------
 @dataclass
@@ -77,7 +111,7 @@ def bar(draw: ImageDraw.ImageDraw, x, y, w, h, pct, col=(120,255,120), bg=(40,40
     if fillw > 0:
         draw.rectangle((x, y, x+fillw, y+h), fill=col)
 
-def render_panel(name: str, data: ExtruderData) -> Image:
+def render_panel(name: str, data: ExtruderData, active: bool = False) -> Image:
     img = Image.new("RGB", (LAND_W, LAND_H), (0, 0, 0))
     d = ImageDraw.Draw(img)
 
@@ -89,8 +123,22 @@ def render_panel(name: str, data: ExtruderData) -> Image:
     bar(d, bar_x, bar_y, bar_w, bar_h, data.progress)
     label(d, (bar_x+4,  bar_y-14), "Progress", FONTS["xs"], fill=(180,180,180))
     label(d, (bar_x+bar_w-30, bar_y-14), f"{int(data.progress)}%", FONTS["xs"], fill=(180,180,180))
+    if active:
+        label(d, (LAND_W - 64, 4), "ACTIVE", FONTS["xs"], fill=(255, 255, 0))
 
-    d.rectangle((0, 0, LAND_W-1, LAND_H-1), outline=(80,80,80))
+    if active:
+        border_col = (0, 255, 255)  # bright yellow
+        thickness = 4
+    else:
+        border_col = (80, 80, 80)   # normal gray
+        thickness = 1
+
+    for i in range(thickness):
+        d.rectangle(
+            (0 + i, 0 + i, LAND_W - 1 - i, LAND_H - 1 - i),
+            outline=border_col
+        )
+
     return img
 
 # --------------- ERROR SCREENS ----------------
@@ -216,8 +264,11 @@ def main():
                 for cfg in SCREENS:
                     data.append(client.query_tool(cfg["tool"]))
 
-                left_land  = render_panel(SCREENS[0]["name"], data[0])
-                right_land = render_panel(SCREENS[1]["name"], data[1])
+
+                active = get_active_tool(VARS_PATH)
+
+                left_land  = render_panel(SCREENS[0]["name"], data[0], active=(active == 0))
+                right_land = render_panel(SCREENS[1]["name"], data[1], active=(active == 1))
 
                 LEFT.display( to_panel_frame(left_land,  flip_180=FLIP_LEFT_180) )
                 RIGHT.display( to_panel_frame(right_land, flip_180=False) )
