@@ -115,29 +115,29 @@ def render_panel(name: str, data: ExtruderData, active: bool = False) -> Image:
     img = Image.new("RGB", (LAND_W, LAND_H), (0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    label(d, (6, 4), f"{name}  {data.status}", FONTS["lg"])
-    label(d, (10, 36), f"Temp: {int(data.temp)}°C",    FONTS["xl"])
-    label(d, (10, 60), f"Target: {int(data.target)}°", FONTS["md"], fill=(180,180,180))
+    # Header
+    title_state = "ACTIVE TOOL" if active else "STANDBY"
+    label(d, (6, 4), f"{name} {title_state}", FONTS["lg"])
 
-    bar_x, bar_y, bar_w, bar_h = 10, 92, LAND_W-20, 16
+    # Temps: current / target (same size as old "Temp:" line)
+    label(d, (10, 36), f"{int(data.temp)}/{int(data.target)}°C", FONTS["xl"])
+
+    # Progress bar + labels
+    bar_x, bar_y, bar_w, bar_h = 10, 92, LAND_W - 20, 16
     bar(d, bar_x, bar_y, bar_w, bar_h, data.progress)
-    label(d, (bar_x+4,  bar_y-14), "Progress", FONTS["xs"], fill=(180,180,180))
-    label(d, (bar_x+bar_w-30, bar_y-14), f"{int(data.progress)}%", FONTS["xs"], fill=(180,180,180))
-    if active:
-        label(d, (LAND_W - 64, 4), "ACTIVE", FONTS["xs"], fill=(255, 255, 0))
+    label(d, (bar_x + 4,  bar_y - 14), "Progress", FONTS["xs"], fill=(180, 180, 180))
+    label(d, (bar_x + bar_w - 30, bar_y - 14), f"{int(data.progress)}%", FONTS["xs"], fill=(180, 180, 180))
 
+    # Border (BGR tuple—yellow on your ST7735)
     if active:
-        border_col = (0, 255, 255)  # bright yellow
+        border_col = (0, 255, 255)  # bright yellow on BGR panels
         thickness = 4
     else:
         border_col = (80, 80, 80)   # normal gray
         thickness = 1
 
     for i in range(thickness):
-        d.rectangle(
-            (0 + i, 0 + i, LAND_W - 1 - i, LAND_H - 1 - i),
-            outline=border_col
-        )
+        d.rectangle((0 + i, 0 + i, LAND_W - 1 - i, LAND_H - 1 - i), outline=border_col)
 
     return img
 
