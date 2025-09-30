@@ -599,7 +599,7 @@ def render_error_screen(title: str, msg: str, bg_color: tuple[int,int,int] = (0,
     d.rectangle((0, 0, LAND_W-1, LAND_H-1), outline=border_col)
     return img
 
-def display_error_all(title: str, msg: str, bg_color: tuple[int,int,int] = (180, 0, 0)):
+def display_error_all(title: str, msg: str, bg_color: tuple[int,int,int] = (0, 0, 180)):
     """Display the same error on both panels. bg_color allows flashing by toggling.
     """
     frameL = to_panel_frame(render_error_screen(title, msg, bg_color=bg_color), flip_180=FLIP_LEFT_180)
