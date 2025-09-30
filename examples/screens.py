@@ -566,7 +566,7 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
     return img
 
 # --------------- ERROR SCREENS ----------------
-def render_error_screen(title: str, msg: str, bg_color: tuple[int,int,int] = (180, 0, 0)) -> Image:
+def render_error_screen(title: str, msg: str, bg_color: tuple[int,int,int] = (0, 0, 180)) -> Image:
     """
     Render an error screen. bg_color lets the caller choose the background so
     the caller can implement flashing by alternating the color.
