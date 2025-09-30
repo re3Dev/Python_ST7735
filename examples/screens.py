@@ -19,6 +19,7 @@ SCREENS = [
 POLL_HZ = 5
 HTTP_TIMEOUT = 1.2
 BAUD = 16_000_000
+ERROR_FLASH_PERIOD = 0.5  # seconds for on/off flash when Klipper is in error
 
 LAND_W, LAND_H = 160, 128          # draw in landscape
 PORTRAIT_W, PORTRAIT_H = 128, 160  # driver expects portrait
@@ -565,8 +566,12 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
     return img
 
 # --------------- ERROR SCREENS ----------------
-def render_error_screen(title: str, msg: str) -> Image:
-    img = Image.new("RGB", (LAND_W, LAND_H), (180, 0, 0))
+def render_error_screen(title: str, msg: str, bg_color: tuple[int,int,int] = (180, 0, 0)) -> Image:
+    """
+    Render an error screen. bg_color lets the caller choose the background so
+    the caller can implement flashing by alternating the color.
+    """
+    img = Image.new("RGB", (LAND_W, LAND_H), bg_color)
     d = ImageDraw.Draw(img)
     label(d, (6, 4), title, FONTS["lg"], fill=(255,255,255))
 
@@ -586,12 +591,19 @@ def render_error_screen(title: str, msg: str) -> Image:
         label(d, (6, y), ln, FONTS["xs"], fill=(255,255,255))
         y += 12
 
-    d.rectangle((0, 0, LAND_W-1, LAND_H-1), outline=(255,220,220))
+    # border color: slightly lighter than background for visibility
+    try:
+        border_col = (min(255, bg_color[0] + 75), min(255, bg_color[1] + 75), min(255, bg_color[2] + 75))
+    except Exception:
+        border_col = (255,220,220)
+    d.rectangle((0, 0, LAND_W-1, LAND_H-1), outline=border_col)
     return img
 
-def display_error_all(title: str, msg: str):
-    frameL = to_panel_frame(render_error_screen(title, msg), flip_180=FLIP_LEFT_180)
-    frameR = to_panel_frame(render_error_screen(title, msg), flip_180=False)
+def display_error_all(title: str, msg: str, bg_color: tuple[int,int,int] = (180, 0, 0)):
+    """Display the same error on both panels. bg_color allows flashing by toggling.
+    """
+    frameL = to_panel_frame(render_error_screen(title, msg, bg_color=bg_color), flip_180=FLIP_LEFT_180)
+    frameR = to_panel_frame(render_error_screen(title, msg, bg_color=bg_color), flip_180=False)
     LEFT.display(frameL)
     RIGHT.display(frameR)
 
@@ -711,9 +723,16 @@ def main():
                 # Hard fail mode: both screens red with reason
                 title = f"KLIPPER {kstate.upper()}"
                 msg = kmsg or "Check printer console for details."
-                if (title, msg) != last_err:
-                    display_error_all(title, msg)
-                    last_err = (title, msg)
+                # Flashing: alternate between bright red and darker red every ERROR_FLASH_PERIOD
+                now = time.monotonic()
+                phase = int(now / ERROR_FLASH_PERIOD) % 2
+                bright = (255, 0, 0)
+                dim    = (100, 0, 0)
+                bg = bright if phase == 0 else dim
+                # Only update the display when the title/msg OR bg phase changes to reduce redraws
+                if (title, msg, phase) != last_err:
+                    display_error_all(title, msg, bg_color=bg)
+                    last_err = (title, msg, phase)
             else:
                 # 2) Normal dashboard: fetch both tools and render
                 data = []
