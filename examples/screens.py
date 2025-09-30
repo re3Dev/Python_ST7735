@@ -21,8 +21,8 @@ import Adafruit_GPIO.SPI as SPI
 # You can point both screens at the same Moonraker, or at two different ones.
 # TOOL can be "extruder" for T0, "extruder1" for T1, etc. (match your Klipper tool names)
 SCREENS = [
-    {"name": "T0", "url": "http://192.168.1.50:7125", "tool": "extruder"},   # LEFT
-    {"name": "T1", "url": "http://192.168.1.50:7125", "tool": "extruder1"},  # RIGHT
+    {"name": "T0", "url": "http://127.0.0.1:7125", "tool": "extruder"},   # LEFT
+    {"name": "T1", "url": "http://127.0.0.1:7125", "tool": "extruder1"},  # RIGHT
 ]
 POLL_HZ = 5                 # how often to poll Moonraker
 HTTP_TIMEOUT = 1.2          # seconds
