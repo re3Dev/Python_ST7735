@@ -39,6 +39,13 @@ EXTRUDER_VEL_EMA = [0.0, 0.0] # smoothed e_vel per screen
 EXTRUDER_SPIN_DIR = -1.0
 _last_tick_time = None
 
+# M117 message tracking
+_m117_message = None
+_m117_timestamp = 0.0
+_last_m117_message = None  # Track previous message to prevent unnecessary redraws
+_last_m117_timestamp = 0.0  # Track when last message state changed
+M117_CLEAR_TIMEOUT = 60.0  # 1 minute in seconds
+
 
 # -------- THEME (Light Mode, BGR tuples) --------
 # -------- THEME (Neutral Gray Mode, BGR tuples) --------
@@ -146,7 +153,9 @@ class ExtruderData:
     vel: float = 0.0
     e: float = 0.0
     e_vel: float = 0.0
-    filename: Optional[str] = None 
+    filename: Optional[str] = None
+    m117_message: Optional[str] = None
+    m117_timestamp: float = 0.0 
 
 # ----------------- RENDER HELPERS -----------------
 def _soft_offset(img: Image) -> Image:
@@ -431,6 +440,58 @@ def draw_progress_bar_modern(d: ImageDraw.ImageDraw, x, y, w, h, pct):
     d.text((x + (w - tw)//2, y + (h - FONTS["xs"].size)//2 - 1),
            label, font=FONTS["xs"], fill=TEXT_SECONDARY)
 
+def draw_modern_m117_message(d: ImageDraw.ImageDraw, message: str, timestamp: float):
+    """Draw a clean, static M117 message display"""
+    
+    # Simple modern card layout
+    msg_area_x = 12
+    msg_area_y = 42
+    msg_area_w = LAND_W - 24
+    msg_area_h = 44
+    
+    # Clean card background - single color, no effects
+    card_bg = hex_to_bgr("#2A2F36")
+    _rr(d, msg_area_x, msg_area_y, msg_area_x + msg_area_w, msg_area_y + msg_area_h, 
+        r=4, fill=card_bg, outline=BRAND_YELLOW)
+    
+    # Small message indicator dot
+    dot_x = msg_area_x + 8
+    dot_y = msg_area_y + 8
+    d.ellipse((dot_x, dot_y, dot_x + 4, dot_y + 4), fill=BRAND_YELLOW)
+    
+    # Word wrap the message simply
+    words = message.split()
+    lines = []
+    current_line = ""
+    max_width = msg_area_w - 24  # Leave space for padding
+    
+    for word in words:
+        test_line = f"{current_line} {word}".strip()
+        if d.textlength(test_line, font=FONTS["sm"]) <= max_width:
+            current_line = test_line
+        else:
+            if current_line:
+                lines.append(current_line)
+                current_line = word
+            else:
+                # Truncate long words
+                current_line = word[:15] + "..." if len(word) > 15 else word
+    
+    if current_line:
+        lines.append(current_line)
+    
+    # Limit to 2 lines for stability
+    lines = lines[:2]
+    
+    # Draw text cleanly
+    text_x = dot_x + 10
+    line_height = FONTS["sm"].size + 3
+    start_y = msg_area_y + (msg_area_h - len(lines) * line_height) // 2
+    
+    for i, line in enumerate(lines):
+        y_pos = start_y + i * line_height
+        d.text((text_x, y_pos), line, font=FONTS["sm"], fill=TEXT_PRIMARY)
+
 def ellipsize_middle(d: ImageDraw.ImageDraw, text: str, font, max_w: int) -> str:
     if not text:
         return ""
@@ -517,11 +578,16 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
     # Divider under header
     draw_h_rule(d, 6, LAND_W - 6, header_h, DIVIDER_COLOR)
 
-    # --- Big temps, centered: "current/target °C" ---
-    temp_text = f"{int(data.temp)}/{int(data.target)}°C"
-    temp_col = temps_color(data.temp, data.target)  # subtle state color
-    tw = int(d.textlength(temp_text, font=FONTS["xl"]))
-    d.text(((LAND_W - tw)//2, 48), temp_text, font=FONTS["xl"], fill=temp_col)
+    # --- Big temps or M117 message, centered ---
+    if not active and data.m117_message:
+        # Show modern M117 message display on non-active tool
+        draw_modern_m117_message(d, data.m117_message, data.m117_timestamp)
+    else:
+        # Show normal temperature display
+        temp_text = f"{int(data.temp)}/{int(data.target)}°C"
+        temp_col = temps_color(data.temp, data.target)  # subtle state color
+        tw = int(d.textlength(temp_text, font=FONTS["xl"]))
+        d.text(((LAND_W - tw)//2, 48), temp_text, font=FONTS["xl"], fill=temp_col)
 
     if active:
         orbit_size   = 36
@@ -643,6 +709,15 @@ class MoonrakerClient:
 
         return {"state": state, "message": msg}
 
+    def get_recent_gcode_responses(self, count: int = 10) -> list:
+        """Get recent G-code responses to look for M117 messages"""
+        try:
+            response = self._get(f"/server/gcode_store?count={count}")
+            gcode_store = response.get("result", {}).get("gcode_store", [])
+            return gcode_store[-count:] if gcode_store else []
+        except Exception:
+            return []
+    
     def query_tool(self, tool: str) -> ExtruderData:
         # ask for print_stats/display_status, both extruders, fan, and motion_report
         q = "print_stats&display_status&extruder&extruder1&fan&toolhead&motion_report"
@@ -701,13 +776,95 @@ class MoonrakerClient:
             x=x, y=y, vel=vel,
             e=e, e_vel=e_vel,
             filename=fname,
+            m117_message=_m117_message,
+            m117_timestamp=_m117_timestamp,
         )
+
+def needs_redraw(panel_index: int, data: ExtruderData, active: bool, extruder_phase: float) -> bool:
+    """Check if panel needs to be redrawn based on data changes"""
+    global _last_frame_data
+    
+    # Create a simple hash of the current state
+    current_state = (
+        data.temp, data.target, data.fan, data.status, data.progress,
+        data.x, data.y, data.vel, data.e_vel, data.filename,
+        data.m117_message, data.m117_timestamp, active, int(extruder_phase * 100)
+    )
+    
+    # Check if anything changed
+    if _last_frame_data[panel_index] != current_state:
+        _last_frame_data[panel_index] = current_state
+        return True
+    
+    return False
+
+def process_m117_messages(gcode_responses: list) -> bool:
+    """Process G-code responses to extract M117 messages"""
+    global _m117_message, _m117_timestamp, _last_m117_message, _last_m117_timestamp, _cached_frames
+    
+    current_time = time.time()
+    message_changed = False
+    
+    # First, check if current message should be cleared due to timeout
+    if _m117_message and (current_time - _m117_timestamp) > M117_CLEAR_TIMEOUT:
+        # Only clear if we haven't already cleared
+        if _last_m117_message is not None:
+            _m117_message = None
+            _m117_timestamp = 0.0
+            _last_m117_message = None
+            _last_m117_timestamp = current_time
+            message_changed = True
+        return message_changed
+    
+    # Look for NEW M117 messages in recent responses
+    for response in gcode_responses:
+        message = response.get("message", "")
+        response_time = response.get("time", current_time)
+        
+        # Debug: Print all messages to see what we're getting
+        if message.strip():
+            print(f"DEBUG: Got gcode response: '{message}'")
+        
+        # Check if this is an M117 command
+        if message.upper().startswith("M117"):
+            print(f"DEBUG: Found M117 command: '{message}'")
+            # Extract the message part after M117
+            parts = message.split(" ", 1)
+            if len(parts) > 1:
+                display_message = parts[1].strip()
+                print(f"DEBUG: Extracted message: '{display_message}'")
+                # Only update if this is a DIFFERENT message than what we're currently showing
+                if display_message and display_message != _last_m117_message:
+                    print(f"DEBUG: Setting new M117 message: '{display_message}'")
+                    _m117_message = display_message
+                    _m117_timestamp = response_time
+                    _last_m117_message = display_message
+                    _last_m117_timestamp = response_time
+                    message_changed = True
+            else:
+                # M117 with no message clears the display
+                print(f"DEBUG: M117 clear command")
+                # Only clear if we currently have a message
+                if _last_m117_message is not None:
+                    _m117_message = None
+                    _m117_timestamp = 0.0
+                    _last_m117_message = None
+                    _last_m117_timestamp = response_time
+                    message_changed = True
+    
+    # Clear cached frames if message changed
+    if message_changed:
+        _cached_frames = [None, None]
+    
+    return message_changed
 
 # ----------------- MAIN -----------------
 def main():
+    global _cached_frames, _last_frame_data  # Add missing global declarations
     period = 1.0 / POLL_HZ
     client = MoonrakerClient(MOONRAKER_URL, timeout=HTTP_TIMEOUT)
     last_err = None
+    gcode_check_counter = 0  # Only check G-code every few cycles
 
     display_error_all("INIT", "Waiting for Moonraker...")
 
@@ -735,7 +892,22 @@ def main():
                     display_error_all(title, msg, bg_color=bg)
                     last_err = (title, msg, phase)
             else:
-                # 2) Normal dashboard: fetch both tools and render
+                # 2) Normal dashboard: check G-code responses for M117 messages
+                gcode_check_counter += 1
+                if gcode_check_counter >= 5:  # Check every 5 cycles (every 1 second at 5Hz) - more frequent
+                    gcode_responses = client.get_recent_gcode_responses(20)
+                    message_changed = process_m117_messages(gcode_responses)
+                    gcode_check_counter = 0
+                    
+                    # Debug: Print M117 status
+                    if _m117_message:
+                        print(f"DEBUG: M117 message active: '{_m117_message}'")
+                    
+                    # Clear cached frames if message changed
+                    if message_changed:
+                        print(f"DEBUG: M117 message changed, clearing cache")
+                        _cached_frames = [None, None]
+                
                 data = []
                 for cfg in SCREENS:
                     data.append(client.query_tool(cfg["tool"]))
@@ -776,14 +948,12 @@ def main():
                     # Advance persistent phase and wrap
                     EXTRUDER_PHASE[i] = (EXTRUDER_PHASE[i] + omega * dt) % (2.0 * math.pi)
 
-
-                
-
-                left_land  = render_panel(SCREENS[0]["name"], data[0], active=(active == 0), extruder_phase=EXTRUDER_PHASE[0])
+                # Always render frames for now to ensure M117 messages show up
+                left_land = render_panel(SCREENS[0]["name"], data[0], active=(active == 0), extruder_phase=EXTRUDER_PHASE[0])
                 right_land = render_panel(SCREENS[1]["name"], data[1], active=(active == 1), extruder_phase=EXTRUDER_PHASE[1])
 
-                LEFT.display( to_panel_frame(left_land,  flip_180=FLIP_LEFT_180) )
-                RIGHT.display( to_panel_frame(right_land, flip_180=False) )
+                LEFT.display(to_panel_frame(left_land, flip_180=FLIP_LEFT_180))
+                RIGHT.display(to_panel_frame(right_land, flip_180=False))
 
                 last_err = None  # clear error
 
