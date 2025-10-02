@@ -41,10 +41,9 @@ _last_tick_time = None
 
 # M117 message tracking
 _m117_message = None
-_m117_timestamp = 0.0
-_last_m117_message = None  # Track previous message to prevent unnecessary redraws
-_last_m117_timestamp = 0.0  # Track when last message state changed
-M117_CLEAR_TIMEOUT = 60.0  # 1 minute in seconds
+_m117_timestamp_mono = 0.0  # when we saw it, in time.monotonic() units
+_last_seen_gcode_time = None  # optional: track Moonraker's gcode time to avoid reprocessing history
+M117_CLEAR_TIMEOUT = 60.0
 
 
 # -------- THEME (Light Mode, BGR tuples) --------
@@ -580,8 +579,13 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
 
     # --- Big temps or M117 message, centered ---
     if not active and data.m117_message:
-        # Show modern M117 message display on non-active tool
-        draw_modern_m117_message(d, data.m117_message, data.m117_timestamp)
+        message_age = time.monotonic() - data.m117_timestamp
+        if message_age < M117_CLEAR_TIMEOUT:
+            draw_modern_m117_message(d, data.m117_message, data.m117_timestamp)
+        else:
+            # (optional) don’t immediately flip UI here; just omit card and let
+            # process_m117_messages clear on next poll to avoid one-frame flicker.
+            pass
     else:
         # Show normal temperature display
         temp_text = f"{int(data.temp)}/{int(data.target)}°C"
@@ -777,7 +781,7 @@ class MoonrakerClient:
             e=e, e_vel=e_vel,
             filename=fname,
             m117_message=_m117_message,
-            m117_timestamp=_m117_timestamp,
+            m117_timestamp=_m117_timestamp_mono,
         )
 
 def needs_redraw(panel_index: int, data: ExtruderData, active: bool, extruder_phase: float) -> bool:
@@ -799,64 +803,58 @@ def needs_redraw(panel_index: int, data: ExtruderData, active: bool, extruder_ph
     return False
 
 def process_m117_messages(gcode_responses: list) -> bool:
-    """Process G-code responses to extract M117 messages"""
-    global _m117_message, _m117_timestamp, _last_m117_message, _last_m117_timestamp, _cached_frames
-    
-    current_time = time.time()
-    message_changed = False
-    
-    # First, check if current message should be cleared due to timeout
-    if _m117_message and (current_time - _m117_timestamp) > M117_CLEAR_TIMEOUT:
-        # Only clear if we haven't already cleared
-        if _last_m117_message is not None:
-            _m117_message = None
-            _m117_timestamp = 0.0
-            _last_m117_message = None
-            _last_m117_timestamp = current_time
-            message_changed = True
-        return message_changed
-    
-    # Look for NEW M117 messages in recent responses
-    for response in gcode_responses:
-        message = response.get("message", "")
-        response_time = response.get("time", current_time)
-        
-        # Debug: Print all messages to see what we're getting
-        if message.strip():
-            print(f"DEBUG: Got gcode response: '{message}'")
-        
-        # Check if this is an M117 command
-        if message.upper().startswith("M117"):
-            print(f"DEBUG: Found M117 command: '{message}'")
-            # Extract the message part after M117
-            parts = message.split(" ", 1)
-            if len(parts) > 1:
-                display_message = parts[1].strip()
-                print(f"DEBUG: Extracted message: '{display_message}'")
-                # Only update if this is a DIFFERENT message than what we're currently showing
-                if display_message and display_message != _last_m117_message:
-                    print(f"DEBUG: Setting new M117 message: '{display_message}'")
-                    _m117_message = display_message
-                    _m117_timestamp = response_time
-                    _last_m117_message = display_message
-                    _last_m117_timestamp = response_time
-                    message_changed = True
-            else:
-                # M117 with no message clears the display
-                print(f"DEBUG: M117 clear command")
-                # Only clear if we currently have a message
-                if _last_m117_message is not None:
-                    _m117_message = None
-                    _m117_timestamp = 0.0
-                    _last_m117_message = None
-                    _last_m117_timestamp = response_time
-                    message_changed = True
-    
-    # Clear cached frames if message changed
-    if message_changed:
+    global _m117_message, _m117_timestamp_mono, _last_m117_message, _last_m117_timestamp, _cached_frames, _last_seen_gcode_time
+
+    now_mono = time.monotonic()
+    changed = False
+
+    # 1) expire based on monotonic
+    if _m117_message and (now_mono - _m117_timestamp_mono) > M117_CLEAR_TIMEOUT:
+        _m117_message = None
+        _last_m117_message = None
+        _last_m117_timestamp = now_mono
         _cached_frames = [None, None]
-    
-    return message_changed
+        return True
+
+    # 2) ignore historical repeats by only processing strictly-new gcode times
+    newest_resp_time = _last_seen_gcode_time
+    for resp in gcode_responses:
+        msg = (resp.get("message") or "").strip()
+        rtime = resp.get("time")  # Moonraker server time (monotonic since start)
+        if rtime is None:
+            continue
+        if _last_seen_gcode_time is not None and rtime <= _last_seen_gcode_time:
+            continue  # already processed this or older
+
+        if msg.upper().startswith("M117"):
+            parts = msg.split(" ", 1)
+            display_msg = parts[1].strip() if len(parts) > 1 else ""
+            # Empty -> clear
+            if not display_msg:
+                if _m117_message is not None:
+                    _m117_message = None
+                    _last_m117_message = None
+                    _last_m117_timestamp = now_mono
+                    _m117_timestamp_mono = 0.0
+                    changed = True
+            else:
+                # Only update if truly different from the currently displayed message
+                if display_msg != _m117_message:
+                    _m117_message = display_msg
+                    _last_m117_message = display_msg
+                    _m117_timestamp_mono = now_mono
+                    _last_m117_timestamp = now_mono
+                    changed = True
+
+        if newest_resp_time is None or rtime > newest_resp_time:
+            newest_resp_time = rtime
+
+    if newest_resp_time is not None:
+        _last_seen_gcode_time = newest_resp_time
+
+    if changed:
+        _cached_frames = [None, None]
+    return changed
 
 # ----------------- MAIN -----------------
 def main():
