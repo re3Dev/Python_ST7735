@@ -616,25 +616,17 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
         bar_x = margin
         bar_y = LAND_H - margin - bar_h
 
-        # Prefer showing a static M117 message in the cap area if it's present and fresh
+        # Always reserve the cap area for the M117 value (use empty string if None)
         cap_font = FONTS["xs"]
         max_w = bar_w
-        show_cap_text = None
-        if data.m117_message:
-            age = time.monotonic() - (data.m117_timestamp or 0.0)
-            if age < M117_CLEAR_TIMEOUT:
-                show_cap_text = data.m117_message
+        show_cap_text = data.m117_message if data.m117_message is not None else ""
 
-        if show_cap_text is None and data.filename:
-            show_cap_text = data.filename
-
-        if show_cap_text:
-            cap_text = ellipsize_middle(d, show_cap_text, cap_font, max_w)
-            tw = int(d.textlength(cap_text, font=cap_font))
-            cap_x = bar_x + (bar_w - tw)//2
-            cap_y = bar_y - (cap_font.size + 3)  # a little gap above the bar
-            # Draw directly like temps so rendering is consistent
-            d.text((cap_x, cap_y), cap_text, font=cap_font, fill=TEXT_SECONDARY)
+        # Draw the (possibly empty) M117 text; no filename fallback — cap reserved
+        cap_text = ellipsize_middle(d, show_cap_text, cap_font, max_w)
+        tw = int(d.textlength(cap_text, font=cap_font))
+        cap_x = bar_x + (bar_w - tw)//2
+        cap_y = bar_y - (cap_font.size + 3)  # a little gap above the bar
+        d.text((cap_x, cap_y), cap_text, font=cap_font, fill=TEXT_SECONDARY)
 
         draw_progress_bar_modern(d, bar_x, bar_y, bar_w, bar_h, data.progress)
 
