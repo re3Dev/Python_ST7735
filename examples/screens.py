@@ -51,15 +51,19 @@ _last_m117_timestamp = 0.0
 _cap_cache = [None, None]  # per-panel cached (text, Image) for the bottom cap area
 
 def build_cap_image(text: str, width: int, font) -> Image:
-    """Create a small image for the bottom cap text, centered, with panel bg."""
+    """Create a small RGBA image for the bottom cap text (transparent background).
+    We return an RGBA image so callers can paste it with its alpha channel and not
+    overwrite the panel background (avoids visible solid rectangles).
+    """
     pad_y = 2
     h = font.size + pad_y * 2
-    img = Image.new("RGB", (width, h), DARK_BG)
+    img = Image.new("RGBA", (width, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     tw = int(d.textlength(text, font=font))
     x = (width - tw) // 2
     y = pad_y - 1
-    d.text((x, y), text, font=font, fill=TEXT_SECONDARY)
+    # draw text opaque on transparent background
+    d.text((x, y), text, font=font, fill=TEXT_SECONDARY + (255,))
     return img
 
 
@@ -654,10 +658,14 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
             else:
                 cap_img = _cap_cache[panel_index][1]
 
-            # Paste cap image centered above the bar
+            # Paste cap image centered above the bar using alpha mask
             cap_x = bar_x + (bar_w - cap_img.width) // 2
             cap_y = bar_y - cap_img.height - 3
-            img.paste(cap_img, (cap_x, cap_y))
+            try:
+                img.paste(cap_img.convert("RGB"), (cap_x, cap_y), cap_img.split()[-1])
+            except Exception:
+                # fallback, paste without mask
+                img.paste(cap_img.convert("RGB"), (cap_x, cap_y))
 
         draw_progress_bar_modern(d, bar_x, bar_y, bar_w, bar_h, data.progress)
 
