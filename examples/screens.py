@@ -828,7 +828,7 @@ def process_m117_messages(gcode_responses: list) -> bool:
         _m117_message = None
         _last_m117_message = None
         _last_m117_timestamp = now_mono
-        _cached_frames = [None, None]
+        # don't clear cached frames here; let needs_redraw drive re-rendering
         return True
 
     # 2) ignore historical repeats by only processing strictly-new gcode times
@@ -867,8 +867,9 @@ def process_m117_messages(gcode_responses: list) -> bool:
     if newest_resp_time is not None:
         _last_seen_gcode_time = newest_resp_time
 
+    # If changed, let the main loop's needs_redraw detect and re-render next cycle.
     if changed:
-        _cached_frames = [None, None]
+        pass
     return changed
 
 # ----------------- MAIN -----------------
@@ -961,12 +962,22 @@ def main():
                     # Advance persistent phase and wrap
                     EXTRUDER_PHASE[i] = (EXTRUDER_PHASE[i] + omega * dt) % (2.0 * math.pi)
 
-                # Always render frames for now to ensure M117 messages show up
-                left_land = render_panel(SCREENS[0]["name"], data[0], active=(active == 0), extruder_phase=EXTRUDER_PHASE[0])
-                right_land = render_panel(SCREENS[1]["name"], data[1], active=(active == 1), extruder_phase=EXTRUDER_PHASE[1])
+                # Use caching: only render panels that need redraw (or if cache empty)
+                rendered = [False, False]
+                for i in range(2):
+                    panel_active = (active == i)
+                    if needs_redraw(i, data[i], panel_active, EXTRUDER_PHASE[i]) or _cached_frames[i] is None:
+                        land = render_panel(SCREENS[i]["name"], data[i], active=panel_active, extruder_phase=EXTRUDER_PHASE[i])
+                        frame = to_panel_frame(land, flip_180=(FLIP_LEFT_180 if i == 0 else False))
+                        _cached_frames[i] = frame
+                        rendered[i] = True
 
-                LEFT.display(to_panel_frame(left_land, flip_180=FLIP_LEFT_180))
-                RIGHT.display(to_panel_frame(right_land, flip_180=False))
+                # Push cached frames to each display if available. This keeps both
+                # panels showing valid frames even if only one side was re-rendered.
+                if _cached_frames[0] is not None:
+                    LEFT.display(_cached_frames[0])
+                if _cached_frames[1] is not None:
+                    RIGHT.display(_cached_frames[1])
 
                 last_err = None  # clear error
 
