@@ -621,14 +621,23 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
         max_w = bar_w
         show_cap_text = data.m117_message if data.m117_message is not None else ""
 
-        # Draw the (possibly empty) M117 text; no filename fallback — cap reserved
-        cap_text = ellipsize_middle(d, show_cap_text, cap_font, max_w)
-        tw = int(d.textlength(cap_text, font=cap_font))
-        cap_x = bar_x + (bar_w - tw)//2
-        cap_y = bar_y - (cap_font.size + 3)  # a little gap above the bar
-        d.text((cap_x, cap_y), cap_text, font=cap_font, fill=TEXT_SECONDARY)
+    # Draw the (possibly empty) M117 text; no filename fallback — cap reserved
+    cap_text = ellipsize_middle(d, show_cap_text, cap_font, max_w)
+    tw = int(d.textlength(cap_text, font=cap_font))
+    cap_x = bar_x + (bar_w - tw)//2
+    cap_h = cap_font.size + 4
+    cap_y = bar_y - (cap_font.size + 3)  # a little gap above the bar
 
-        draw_progress_bar_modern(d, bar_x, bar_y, bar_w, bar_h, data.progress)
+    # Clear the cap area first so an empty M117 doesn't leave previous pixels.
+    cap_x0 = bar_x
+    cap_y0 = bar_y - cap_h - 4
+    cap_x1 = bar_x + bar_w
+    cap_y1 = bar_y - 2
+    _rr(d, cap_x0, cap_y0, cap_x1, cap_y1, r=4, fill=DARK_SURFACE, outline=None)
+
+    d.text((cap_x, cap_y), cap_text, font=cap_font, fill=TEXT_SECONDARY)
+
+    draw_progress_bar_modern(d, bar_x, bar_y, bar_w, bar_h, data.progress)
 
     return img
 
