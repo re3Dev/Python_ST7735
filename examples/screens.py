@@ -44,6 +44,10 @@ _m117_message = None
 _m117_timestamp_mono = 0.0  # when we saw it, in time.monotonic() units
 _last_seen_gcode_time = None  # optional: track Moonraker's gcode time to avoid reprocessing history
 M117_CLEAR_TIMEOUT = 60.0
+_cached_frames = [None, None]
+_last_frame_data = [None, None]
+_last_m117_message = None
+_last_m117_timestamp = 0.0
 
 
 # -------- THEME (Light Mode, BGR tuples) --------
@@ -622,10 +626,20 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
         bar_x = margin
         bar_y = LAND_H - margin - bar_h
 
-        if data.filename:
-            cap_font = FONTS["xs"]
-            max_w = bar_w
-            cap_text = ellipsize_middle(d, data.filename, cap_font, max_w)
+        # Prefer showing a static M117 message in the cap area if it's present and fresh
+        cap_font = FONTS["xs"]
+        max_w = bar_w
+        show_cap_text = None
+        if data.m117_message:
+            age = time.monotonic() - (data.m117_timestamp or 0.0)
+            if age < M117_CLEAR_TIMEOUT:
+                show_cap_text = data.m117_message
+
+        if show_cap_text is None and data.filename:
+            show_cap_text = data.filename
+
+        if show_cap_text:
+            cap_text = ellipsize_middle(d, show_cap_text, cap_font, max_w)
             tw = int(d.textlength(cap_text, font=cap_font))
             cap_x = bar_x + (bar_w - tw)//2
             cap_y = bar_y - (cap_font.size + 3)  # a little gap above the bar
@@ -789,9 +803,10 @@ def needs_redraw(panel_index: int, data: ExtruderData, active: bool, extruder_ph
     global _last_frame_data
     
     # Create a simple hash of the current state
+    # Exclude filename from the redraw state — we reserve the cap area for M117
     current_state = (
         data.temp, data.target, data.fan, data.status, data.progress,
-        data.x, data.y, data.vel, data.e_vel, data.filename,
+        data.x, data.y, data.vel, data.e_vel,
         data.m117_message, data.m117_timestamp, active, int(extruder_phase * 100)
     )
     
