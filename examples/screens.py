@@ -48,6 +48,19 @@ _cached_frames = [None, None]
 _last_frame_data = [None, None]
 _last_m117_message = None
 _last_m117_timestamp = 0.0
+_cap_cache = [None, None]  # per-panel cached (text, Image) for the bottom cap area
+
+def build_cap_image(text: str, width: int, font) -> Image:
+    """Create a small image for the bottom cap text, centered, with panel bg."""
+    pad_y = 2
+    h = font.size + pad_y * 2
+    img = Image.new("RGB", (width, h), DARK_BG)
+    d = ImageDraw.Draw(img)
+    tw = int(d.textlength(text, font=font))
+    x = (width - tw) // 2
+    y = pad_y - 1
+    d.text((x, y), text, font=font, fill=TEXT_SECONDARY)
+    return img
 
 
 # -------- THEME (Light Mode, BGR tuples) --------
@@ -630,10 +643,21 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
 
         if show_cap_text:
             cap_text = ellipsize_middle(d, show_cap_text, cap_font, max_w)
-            tw = int(d.textlength(cap_text, font=cap_font))
-            cap_x = bar_x + (bar_w - tw)//2
-            cap_y = bar_y - (cap_font.size + 3)  # a little gap above the bar
-            d.text((cap_x, cap_y), cap_text, font=cap_font, fill=TEXT_SECONDARY)
+            # Use cached cap image per panel so pixels remain stable between frames
+            try:
+                panel_index = 0 if name == SCREENS[0]["name"] else 1
+            except Exception:
+                panel_index = 0
+            if _cap_cache[panel_index] is None or _cap_cache[panel_index][0] != cap_text:
+                cap_img = build_cap_image(cap_text, max_w, cap_font)
+                _cap_cache[panel_index] = (cap_text, cap_img)
+            else:
+                cap_img = _cap_cache[panel_index][1]
+
+            # Paste cap image centered above the bar
+            cap_x = bar_x + (bar_w - cap_img.width) // 2
+            cap_y = bar_y - cap_img.height - 3
+            img.paste(cap_img, (cap_x, cap_y))
 
         draw_progress_bar_modern(d, bar_x, bar_y, bar_w, bar_h, data.progress)
 
@@ -808,7 +832,7 @@ def needs_redraw(panel_index: int, data: ExtruderData, active: bool, extruder_ph
     return False
 
 def process_m117_messages(gcode_responses: list) -> bool:
-    global _m117_message, _m117_timestamp_mono, _last_m117_message, _last_m117_timestamp, _cached_frames, _last_seen_gcode_time
+    global _m117_message, _m117_timestamp_mono, _last_m117_message, _last_m117_timestamp, _cached_frames, _last_seen_gcode_time, _cap_cache
 
     now_mono = time.monotonic()
     changed = False
@@ -842,6 +866,8 @@ def process_m117_messages(gcode_responses: list) -> bool:
                     _last_m117_timestamp = now_mono
                     _m117_timestamp_mono = 0.0
                     changed = True
+                    # clear cap cache so the UI will rebuild the fallback filename cap
+                    _cap_cache = [None, None]
             else:
                 # Only update if truly different from the currently displayed message
                 if display_msg != _m117_message:
@@ -850,6 +876,8 @@ def process_m117_messages(gcode_responses: list) -> bool:
                     _m117_timestamp_mono = now_mono
                     _last_m117_timestamp = now_mono
                     changed = True
+                    # clear cap cache so new cap image will be built
+                    _cap_cache = [None, None]
 
         if newest_resp_time is None or rtime > newest_resp_time:
             newest_resp_time = rtime
