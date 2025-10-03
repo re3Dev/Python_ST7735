@@ -48,23 +48,6 @@ _cached_frames = [None, None]
 _last_frame_data = [None, None]
 _last_m117_message = None
 _last_m117_timestamp = 0.0
-_cap_cache = [None, None]  # per-panel cached (text, Image) for the bottom cap area
-
-def build_cap_image(text: str, width: int, font) -> Image:
-    """Create a small RGBA image for the bottom cap text (transparent background).
-    We return an RGBA image so callers can paste it with its alpha channel and not
-    overwrite the panel background (avoids visible solid rectangles).
-    """
-    pad_y = 2
-    h = font.size + pad_y * 2
-    img = Image.new("RGBA", (width, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    tw = int(d.textlength(text, font=font))
-    x = (width - tw) // 2
-    y = pad_y - 1
-    # draw text opaque on transparent background
-    d.text((x, y), text, font=font, fill=TEXT_SECONDARY + (255,))
-    return img
 
 
 # -------- THEME (Light Mode, BGR tuples) --------
@@ -647,25 +630,11 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
 
         if show_cap_text:
             cap_text = ellipsize_middle(d, show_cap_text, cap_font, max_w)
-            # Use cached cap image per panel so pixels remain stable between frames
-            try:
-                panel_index = 0 if name == SCREENS[0]["name"] else 1
-            except Exception:
-                panel_index = 0
-            if _cap_cache[panel_index] is None or _cap_cache[panel_index][0] != cap_text:
-                cap_img = build_cap_image(cap_text, max_w, cap_font)
-                _cap_cache[panel_index] = (cap_text, cap_img)
-            else:
-                cap_img = _cap_cache[panel_index][1]
-
-            # Paste cap image centered above the bar using alpha mask
-            cap_x = bar_x + (bar_w - cap_img.width) // 2
-            cap_y = bar_y - cap_img.height - 3
-            try:
-                img.paste(cap_img.convert("RGB"), (cap_x, cap_y), cap_img.split()[-1])
-            except Exception:
-                # fallback, paste without mask
-                img.paste(cap_img.convert("RGB"), (cap_x, cap_y))
+            tw = int(d.textlength(cap_text, font=cap_font))
+            cap_x = bar_x + (bar_w - tw)//2
+            cap_y = bar_y - (cap_font.size + 3)  # a little gap above the bar
+            # Draw directly like temps so rendering is consistent
+            d.text((cap_x, cap_y), cap_text, font=cap_font, fill=TEXT_SECONDARY)
 
         draw_progress_bar_modern(d, bar_x, bar_y, bar_w, bar_h, data.progress)
 
