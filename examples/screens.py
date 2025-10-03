@@ -581,21 +581,11 @@ def render_panel(name: str, data: ExtruderData, active: bool = False, extruder_p
     # Divider under header
     draw_h_rule(d, 6, LAND_W - 6, header_h, DIVIDER_COLOR)
 
-    # --- Big temps or M117 message, centered ---
-    if not active and data.m117_message:
-        message_age = time.monotonic() - data.m117_timestamp
-        if message_age < M117_CLEAR_TIMEOUT:
-            draw_modern_m117_message(d, data.m117_message, data.m117_timestamp)
-        else:
-            # (optional) don’t immediately flip UI here; just omit card and let
-            # process_m117_messages clear on next poll to avoid one-frame flicker.
-            pass
-    else:
-        # Show normal temperature display
-        temp_text = f"{int(data.temp)}/{int(data.target)}°C"
-        temp_col = temps_color(data.temp, data.target)  # subtle state color
-        tw = int(d.textlength(temp_text, font=FONTS["xl"]))
-        d.text(((LAND_W - tw)//2, 48), temp_text, font=FONTS["xl"], fill=temp_col)
+    # --- Big temps (always) ---
+    temp_text = f"{int(data.temp)}/{int(data.target)}°C"
+    temp_col = temps_color(data.temp, data.target)  # subtle state color
+    tw = int(d.textlength(temp_text, font=FONTS["xl"]))
+    d.text(((LAND_W - tw)//2, 48), temp_text, font=FONTS["xl"], fill=temp_col)
 
     if active:
         orbit_size   = 36
@@ -962,22 +952,12 @@ def main():
                     # Advance persistent phase and wrap
                     EXTRUDER_PHASE[i] = (EXTRUDER_PHASE[i] + omega * dt) % (2.0 * math.pi)
 
-                # Use caching: only render panels that need redraw (or if cache empty)
-                rendered = [False, False]
-                for i in range(2):
-                    panel_active = (active == i)
-                    if needs_redraw(i, data[i], panel_active, EXTRUDER_PHASE[i]) or _cached_frames[i] is None:
-                        land = render_panel(SCREENS[i]["name"], data[i], active=panel_active, extruder_phase=EXTRUDER_PHASE[i])
-                        frame = to_panel_frame(land, flip_180=(FLIP_LEFT_180 if i == 0 else False))
-                        _cached_frames[i] = frame
-                        rendered[i] = True
+                # Render and display both panels each cycle (keeps UI consistent)
+                left_land = render_panel(SCREENS[0]["name"], data[0], active=(active == 0), extruder_phase=EXTRUDER_PHASE[0])
+                right_land = render_panel(SCREENS[1]["name"], data[1], active=(active == 1), extruder_phase=EXTRUDER_PHASE[1])
 
-                # Push cached frames to each display if available. This keeps both
-                # panels showing valid frames even if only one side was re-rendered.
-                if _cached_frames[0] is not None:
-                    LEFT.display(_cached_frames[0])
-                if _cached_frames[1] is not None:
-                    RIGHT.display(_cached_frames[1])
+                LEFT.display(to_panel_frame(left_land, flip_180=FLIP_LEFT_180))
+                RIGHT.display(to_panel_frame(right_land, flip_180=False))
 
                 last_err = None  # clear error
 
